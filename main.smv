@@ -1,0 +1,193 @@
+-- Студент:        Меркадо Оудалова Данило Анатоли
+-- Предмет:        Технологии верификации и тестирования программного обеспечения
+-- Преподаватель:  Павлов Евгений Алексеевич
+-- Группа:         3540904/20202
+
+
+-- В рамках этого проекта мы проведем тестирование системы бронирования отелей.
+
+MODULE User(website)
+    VAR
+        state: {BEGIN_PROCESS, REQUEST_ROOM, WAIT_FOR_PASSPORT_REQUEST, GIVE_PASSPORT_DATA, WAIT_FOR_PAYMENT_REQUEST, PAY_FOR_ROOM, GET_HOTEL_PASS, END_PROCESS, BREAK };
+        num_of_people: 1..5;
+        num_of_room: 0..4;
+    ASSIGN
+        init(state) := BEGIN_PROCESS;
+        next(state) := 
+            case
+                state = BEGIN_PROCESS : {BEGIN_PROCESS, REQUEST_ROOM};
+
+                --  Verification if the hotel has a space for the user 
+                -- (taking into account the number of people needed by the user)
+                state = REQUEST_ROOM & website.hasPlace : WAIT_FOR_PASSPORT_REQUEST;
+                state = REQUEST_ROOM & website.hasPlace = FALSE : END_PROCESS;
+
+                -- Waiting passport request
+                state = WAIT_FOR_PASSPORT_REQUEST & website.state = PASSPORT_REQUEST: GIVE_PASSPORT_DATA;
+                state = WAIT_FOR_PASSPORT_REQUEST : WAIT_FOR_PASSPORT_REQUEST;
+
+                -- Give passport data and confirm passport data
+                state = GIVE_PASSPORT_DATA & website.state = CONFIRM_PASSPORT_DATA : WAIT_FOR_PAYMENT_REQUEST;
+                state = GIVE_PASSPORT_DATA & website.state = REJECT_PASSPORT : END_PROCESS;
+                state = GIVE_PASSPORT_DATA : GIVE_PASSPORT_DATA;
+
+                -- Waiting for request of payment
+                state = WAIT_FOR_PAYMENT_REQUEST & website.state = PAYMENT_REQUEST : PAY_FOR_ROOM;
+                state = WAIT_FOR_PAYMENT_REQUEST : WAIT_FOR_PAYMENT_REQUEST;
+
+                -- Verification that the payment was successful
+                state = PAY_FOR_ROOM & website.state = BRING_HOTEL_PASS : GET_HOTEL_PASS;
+                state = PAY_FOR_ROOM & website.state = REJECT_PAYMENT : END_PROCESS;
+                state = PAY_FOR_ROOM : PAY_FOR_ROOM;
+
+                -- The user receives the hotel pass
+                state = GET_HOTEL_PASS : END_PROCESS;
+                TRUE: BREAK;
+            esac;
+        init(num_of_room) := {0, 1, 2, 3, 4};
+        init(num_of_people) := {1, 2, 3, 4, 5};
+        next(num_of_room) :=
+            case
+                website.state = REQUEST_CHOOSE_ROOM: {0, 1, 2, 3, 4};
+                TRUE: num_of_room;
+            esac;
+        JUSTICE
+            state != WAIT_FOR_PASSPORT_REQUEST;
+        
+-- Website
+MODULE WebSite(server, user)
+    VAR state: { BEGIN_PROCESS, WAITING, REQUEST_CHOOSE_ROOM, PASSPORT_REQUEST, CONFIRM_PASSPORT_DATA, REJECT_PASSPORT, PAYMENT_REQUEST, BRING_HOTEL_PASS, REJECT_PAYMENT, END_PROCESS, BREAK};
+    ASSIGN
+        init(state) := BEGIN_PROCESS;
+        next(state) :=
+            case
+                -- We are waiting for the user to start choosing a room
+                state = BEGIN_PROCESS : WAITING;
+                state = WAITING & user.state = REQUEST_ROOM: REQUEST_CHOOSE_ROOM;
+                state = WAITING : WAITING;
+
+                -- User choose a room, and room empty, and can live the number of people
+                state = REQUEST_CHOOSE_ROOM & ((server.rooms[user.num_of_room] = FALSE) & (server.capacity_rooms[user.num_of_room] >= user.num_of_people)) : PASSPORT_REQUEST;
+                state = REQUEST_CHOOSE_ROOM : REQUEST_CHOOSE_ROOM;
+
+                -- Waiting until user give passport data
+                state = PASSPORT_REQUEST & user.state = GIVE_PASSPORT_DATA : {CONFIRM_PASSPORT_DATA, REJECT_PASSPORT};
+                state = PASSPORT_REQUEST : PASSPORT_REQUEST;
+
+                -- The passport data is correct or not
+                state = CONFIRM_PASSPORT_DATA & user.state = WAIT_FOR_PAYMENT_REQUEST : PAYMENT_REQUEST;
+                state = CONFIRM_PASSPORT_DATA : CONFIRM_PASSPORT_DATA;
+                state = REJECT_PASSPORT: END_PROCESS;
+
+                -- Payment passed or failed
+                state = PAYMENT_REQUEST & next(user.state) = PAY_FOR_ROOM : {BRING_HOTEL_PASS, REJECT_PAYMENT};       
+                state = PAYMENT_REQUEST: PAYMENT_REQUEST; 
+                state = BRING_HOTEL_PASS | state = REJECT_PASSPORT : END_PROCESS;
+                TRUE: BREAK;
+            esac;
+    DEFINE
+        hasPlace := ((server.count_of_rooms > 0) & 
+            ((server.capacity_rooms[0]>=user.num_of_people) |
+            (server.capacity_rooms[1]>=user.num_of_people) |
+            (server.capacity_rooms[2]>=user.num_of_people) |
+            (server.capacity_rooms[3]>=user.num_of_people) |
+            (server.capacity_rooms[4]>=user.num_of_people)));
+
+-- Server
+MODULE Server(website1, website2)
+VAR 
+    count_of_rooms: 1..5;
+    rooms: array 0..4 of boolean;
+    capacity_rooms: array 0..4 of 1..5;
+ASSIGN
+    init(count_of_rooms) := 5;
+    init(rooms[0]) := FALSE;
+	init(rooms[1]) := FALSE;
+	init(rooms[2]) := FALSE;
+    init(rooms[3]) := FALSE;
+    init(rooms[4]) := FALSE;
+    init(capacity_rooms[0]) := 1;
+    init(capacity_rooms[1]) := 3;
+    init(capacity_rooms[2]) := 5;
+    init(capacity_rooms[3]) := 4;
+    init(capacity_rooms[4]) := 3;
+
+    next(count_of_rooms) := 
+        case
+            (
+                website1.state = BRING_HOTEL_PASS |
+                website2.state = BRING_HOTEL_PASS
+            ) & count_of_rooms > 1 : count_of_rooms - 1;
+            TRUE: count_of_rooms;
+        esac;
+    next(rooms[0]) := (!rooms[0] & (capacity_rooms[0]>= website1.user.num_of_people) ) ? (website1.user.state = GET_HOTEL_PASS & website1.user.num_of_room = 0) | (website2.user.state = GET_HOTEL_PASS & website2.user.num_of_room = 0) : rooms[0];
+    next(rooms[1]) := (!rooms[1] & (capacity_rooms[1]>= website1.user.num_of_people) ) ? (website1.user.state = GET_HOTEL_PASS & website1.user.num_of_room = 1) | (website2.user.state = GET_HOTEL_PASS & website2.user.num_of_room = 1) : rooms[1];
+    next(rooms[2]) := (!rooms[2] & (capacity_rooms[2]>= website1.user.num_of_people) ) ? (website1.user.state = GET_HOTEL_PASS & website1.user.num_of_room = 2) | (website2.user.state = GET_HOTEL_PASS & website2.user.num_of_room = 2) : rooms[2];
+    next(rooms[3]) := (!rooms[3] & (capacity_rooms[3]>= website1.user.num_of_people) ) ? (website1.user.state = GET_HOTEL_PASS & website1.user.num_of_room = 3) | (website2.user.state = GET_HOTEL_PASS & website2.user.num_of_room = 3) : rooms[3];
+    next(rooms[4]) := (!rooms[4] & (capacity_rooms[4]>= website1.user.num_of_people) ) ? (website1.user.state = GET_HOTEL_PASS & website1.user.num_of_room = 3) | (website2.user.state = GET_HOTEL_PASS & website2.user.num_of_room = 3) : rooms[3];
+
+MODULE main
+    VAR
+        server: Server(webSite1, webSite2);
+        user1: User(webSite1);
+        user2: User(webSite2);
+        webSite1: WebSite(server, user1);
+        webSite2: WebSite(server, user2);
+
+    -- 1. When ordering, the user can choose an empty room, that is, it is impossible to select an occupied one
+    SPEC AG(
+        webSite1.state = REQUEST_CHOOSE_ROOM 
+        & (
+            (webSite1.user.num_of_room = 0 & server.rooms[0] = TRUE) |
+            (webSite1.user.num_of_room = 1 & server.rooms[1] = TRUE) |
+            (webSite1.user.num_of_room = 2 & server.rooms[2] = TRUE) |
+            (webSite1.user.num_of_room = 3 & server.rooms[3] = TRUE) |
+            (webSite1.user.num_of_room = 3 & server.rooms[4] = TRUE) 
+        )
+    ) -> AX (webSite1.state = END_PROCESS);
+
+    SPEC AG(
+        webSite2.state = REQUEST_CHOOSE_ROOM 
+        & (
+            (webSite2.user.num_of_room = 0 & server.rooms[0] = TRUE) |
+            (webSite2.user.num_of_room = 1 & server.rooms[1] = TRUE) |
+            (webSite2.user.num_of_room = 2 & server.rooms[2] = TRUE) |
+            (webSite2.user.num_of_room = 3 & server.rooms[3] = TRUE) |
+            (webSite2.user.num_of_room = 3 & server.rooms[4] = TRUE) 
+        )
+    ) -> AX (webSite2.state = END_PROCESS);
+
+    -- 2. If there are fewer users than rooms, then there will be a state when the number of purchases will always be equal to the number of users
+    SPEC AG (user1.state = END_PROCESS | user2.state = END_PROCESS) -> AX (server.count_of_rooms > 1);
+
+    -- 3. If the passport data has not been entered, then you cannot proceed to the payment process
+    SPEC AG (webSite1.state = PASSPORT_REQUEST & user1.state != GIVE_PASSPORT_DATA) -> AX (webSite1.state = PASSPORT_REQUEST);
+    SPEC AG (webSite2.state = PASSPORT_REQUEST & user1.state != GIVE_PASSPORT_DATA) -> AX (webSite2.state = PASSPORT_REQUEST);
+
+    -- 4. If there are empty rooms in the hotel, and have enought space, then the user can definitely choose it
+    SPEC AG (
+        ((server.rooms[0] = FALSE & (server.capacity_rooms[0]>= user1.num_of_people)) | 
+         (server.rooms[1] = FALSE & (server.capacity_rooms[1]>= user1.num_of_people)) |  
+         (server.rooms[2] = FALSE & (server.capacity_rooms[2]>= user1.num_of_people)) |
+         (server.rooms[3] = FALSE & (server.capacity_rooms[3]>= user1.num_of_people)) | 
+         (server.rooms[4] = FALSE & (server.capacity_rooms[4]>= user1.num_of_people)) |
+         (server.rooms[0] = FALSE & (server.capacity_rooms[0]>= user2.num_of_people)) | 
+         (server.rooms[1] = FALSE & (server.capacity_rooms[1]>= user2.num_of_people)) |  
+         (server.rooms[2] = FALSE & (server.capacity_rooms[2]>= user2.num_of_people)) |
+         (server.rooms[3] = FALSE & (server.capacity_rooms[3]>= user2.num_of_people)) | 
+         (server.rooms[4] = FALSE & (server.capacity_rooms[4]>= user2.num_of_people))) & 
+         (user1.state = REQUEST_ROOM | user2.state = REQUEST_ROOM)) -> AF (webSite1.state = REQUEST_CHOOSE_ROOM | webSite2.state = REQUEST_CHOOSE_ROOM);
+
+    -- 5. When the user has pay for the room, he ends the session
+
+    SPEC AG (user1.state = GET_HOTEL_PASS) -> AG (user1.state = END_PROCESS);
+    SPEC AG (user2.state = GET_HOTEL_PASS) -> AG (user2.state = END_PROCESS);
+
+    -- 6. When the rooms are sold, the server ends the session
+
+    SPEC AG (user1.state = REQUEST_ROOM & webSite1.hasPlace = FALSE) -> AX (user1.state = END_PROCESS);
+    SPEC AG (user2.state = REQUEST_ROOM & webSite2.hasPlace = FALSE) -> AX (user2.state = END_PROCESS);
+
+    -- 7. If the site has not received an confirmation of passport data, then it either shuts down or waits for the next request
+    SPEC AG (webSite1.state = REJECT_PASSPORT) -> AX (webSite1.state = END_PROCESS);
+    SPEC AG (webSite2.state = REJECT_PASSPORT) -> AX (webSite2.state = END_PROCESS);
